@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# 1. Download file from SFTP Site
+
+sftp  -o 'IdentityFile ~/.ssh/PL001.pem' PL001@46.51.219.45:data/PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_*.csv /home/pavan/jobs/
+
+
+## Declare Variables
+jobname="Download Open Platform Daily File"
+jobtype="Download File"
+sequence="1"
+successrows="0"
+failedrows="0"
+errordescription="none"
+EndTime=$(date +"%Y-%m-%d %H:%M:%S")
+File=PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_0000.csv
+StartTime=$(date +"%Y-%m-%d %H:%M:%S")
+
+echo "StartTime: $StartTime"
+
+
+# 2. If file is not downloaded,import the status into ETL_processlog table
+
+shopt -s nullglob
+
+if [ ! -e "$(ls /home/pavan/jobs/PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_*.csv)" ];
+then
+echo "File not available to download"
+
+DBUSER=pavan
+DBPASSWORD=Fresh.m3
+DBDATABASE=BI
+
+EndTime=$(date +"%Y-%m-%d %H:%M:%S")
+Status="Failed"
+Error="File not available to download"
+
+mysql --local -B -D $DBDATABASE -u $DBUSER -p$DBPASSWORD <<EOF
+INSERT INTO etl_processlog(name,type,starttime,endtime,sequence,status,successrows,failedrows,filename,errordescription,created_at)
+values ('$jobname','$jobtype','$StartTime','$EndTime','$sequence','$Status','$successrows','$failedrows','$File','$Error','$EndTime')
+
+EOF
+
+
+else
+
+
+# 3. If File exists get file details and import the status into ETL_processlog table
+
+
+FileName=$(ls PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_*.csv)
+FilePath=$(ls /home/pavan/jobs/PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_*.csv)
+
+# 3.1 Set Permissions to the file
+
+$(chmod 755 $FilePath)
+
+# 3.2 Get Records Count from the file
+
+successrows=$(cat $FilePath | wc -l)
+
+# 3.3 Get file size
+
+FileSize=$(stat -c '%s' $FilePath)
+
+
+# 3.4 Import the status into the table
+
+DBUSER=pavan
+DBPASSWORD=Fresh.m3
+DBDATABASE=BI
+
+EndTime=$(date +"%Y-%m-%d %H:%M:%S")
+Status="Success"
+Error="None"
+
+
+mysql --local -B -D $DBDATABASE -u $DBUSER -p$DBPASSWORD <<EOF
+INSERT INTO etl_processlog(name,type,starttime,endtime,sequence,status,successrows,failedrows,filename,errordescription,created_at)
+values ('$jobname','$jobtype','$StartTime','$EndTime','$sequence','$Status','$successrows','$failedrows','$File','$Error','$EndTime')
+
+EOF
+
+# 4. Execute the process to load data from file downloaded
+#$(./singtel_2_dataload)
+
+
+fi
+

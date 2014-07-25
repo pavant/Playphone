@@ -1,0 +1,174 @@
+#!/bin/bash
+
+
+jobname="Fetch Open Platform Daily data"
+jobtype="Staging table load"
+sequence="1"
+successrows="0"
+failedrows="0"
+errordescription="none"
+EndTime=$(date +"%Y-%m-%d %H:%M:%S")
+File="PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_0000.csv"
+
+
+StartTime=$(date +"%Y-%m-%d %H:%M:%S")
+
+echo "StartTime: $StartTime"
+
+## 0.Check if File Exists
+
+shopt -s nullglob
+
+if [ ! -e "$(ls /home/pavan/jobs/PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_*.csv)" ];
+
+
+then
+echo "File Not Found"
+
+DBUSER=pavan
+DBPASSWORD=Fresh.m3
+DBDATABASE=BI
+
+EndTime=$(date +"%Y-%m-%d %H:%M:%S")
+Status="Failed"
+Error="File not found"
+
+mysql --local -B -D $DBDATABASE -u $DBUSER -p$DBPASSWORD <<EOF
+INSERT INTO etl_processlog(name,type,starttime,endtime,sequence,status,successrows,failedrows,filename,errordescription,created_at)
+values ('$jobname','$jobtype','$StartTime','$EndTime','$sequence','$Status','$successrows','$failedrows','$File','$Error','$EndTime')
+
+EOF
+
+
+
+## 1.0 If file Exists
+
+else 
+
+echo "File Exists"
+
+
+FilePath=$(ls /home/pavan/jobs/PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_*.csv)
+FileName=$(ls PL001_Payment_$(date -d yesterday +'%Y%m%d')_$(date +'%Y%m%d')_*.csv)
+
+
+#1.1 Set Permissions to the file
+
+$(chmod 755 $FilePath)
+
+#1.2 Get Records Count from the file
+
+RecordsCount=$(cat $FilePath | wc -l)
+
+#1.3 Get file size
+
+FileSize=$(stat -c '%s' $FilePath)
+
+echo "FilePath: $FilePath"
+echo "FileName: $FileName"
+echo "RecordsCount: $RecordsCount"
+echo "FileSize: $FileSize"
+
+## 2.Check If Rows > 1 
+if [ "$RecordsCount" -gt "1" ]; then
+
+echo "Records Exists"
+
+## 2.1 Rename file
+
+$(cp $FileName PL001_Payment.csv)
+
+## 2.2 Import records into raw table
+
+
+DBUSER=pavan
+DBPASSWORD=Fresh.m3
+DBDATABASE=BI
+
+echo "Inserting into singtel_payment_raw table on BI"
+
+mysql --local --force -B -D $DBDATABASE -u $DBUSER -p$DBPASSWORD <<EOF
+LOAD DATA LOCAL INFILE '/home/pavan/jobs/PL001_Payment.csv'
+IGNORE INTO TABLE singtel_payment_raw
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 ROWS
+(x_partner_id,correlationid,purchasetime,paymentserviceprovider,transactiontype,operatorusertoken,productcode,subscriptionid,paymentdescription              ,merchantcontact,currency,itemprice,tax,total,openplatformtransactionid,transactionid,beginpaymentreceivedtime,beginpaymentresult,beginpaymentmessage        ,endpaymentreceivedtime,endpaymentresult,endpaymentmessage,@dummy,@dummy,@dummy)
+SET created_at=CURRENT_TIMESTAMP, filename='$FileName',row_hash=concat(transactionid,openplatformtransactionid);
+
+EOF
+
+## 2.3 Delete renamed file
+
+$(rm -f PL001_Payment.csv)
+
+# 2.4 Get Imported Records count from 2.2 into a variable to get actual succcess records
+
+
+#declare -i successrows
+
+successrows=$(mysql $DBDATABASE -u$DBUSER -p$DBPASSWORD -s -N -e "select count(*) as records from singtel_payment_raw where filename='$FileName'");
+
+echo "success rows= $successrows"
+
+
+declare -i failedrows
+
+failedrows=($RecordsCount-$successrows-1)
+
+# 2.5 Check if rows were skipped due to duplicate data or bad data
+
+if [ "$failedrows" -gt "0" ]; then
+Error="Duplicate Rows or Bad Data"
+Status="Failed"
+else
+Error="None"
+Status="Success"
+fi
+
+
+# 2.6 Add entry into  ETL_Processlog table
+
+EndTime=$(date +"%Y-%m-%d %H:%M:%S")
+
+DBUSER=pavan
+DBPASSWORD=Fresh.m3
+DBDATABASE=BI
+
+
+mysql --local -B -D $DBDATABASE -u $DBUSER -p$DBPASSWORD <<EOF
+INSERT INTO etl_processlog(name,type,starttime,endtime,sequence,status,successrows,failedrows,filename,errordescription,created_at)
+values ('$jobname','$jobtype','$StartTime','$EndTime','$sequence','$Status','$successrows','$failedrows','$FileName','$Error','$EndTime')
+EOF
+
+
+
+## 3. File exists but with no records
+
+else 
+
+
+echo "No Records"
+
+#No Records
+
+DBUSER=pavan
+DBPASSWORD=Fresh.m3
+DBDATABASE=BI
+
+EndTime=$(date +"%Y-%m-%d %H:%M:%S")
+Status="Failed"
+Error="File has no data"
+
+mysql --local -B -D $DBDATABASE -u $DBUSER -p$DBPASSWORD <<EOF
+INSERT INTO etl_processlog(name,type,starttime,endtime,sequence,status,successrows,failedrows,filename,errordescription,created_at)
+values ('$jobname','$jobtype','$StartTime','$EndTime','$sequence','$Status','$successrows','$failedrows','$FileName','$Error','$EndTime')
+EOF
+
+
+fi
+
+
+fi
+
